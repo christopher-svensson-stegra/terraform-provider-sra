@@ -2,7 +2,6 @@ package rs
 
 import (
 	"context"
-	"reflect"
 	"strconv"
 	"terraform-provider-sra/api"
 	"terraform-provider-sra/bt/models"
@@ -33,7 +32,10 @@ var (
 )
 
 func newVaultUsernamePasswordAccountResource() resource.Resource {
-	return &vaultUsernamePasswordAccountResource{}
+	r := &vaultUsernamePasswordAccountResource{}
+	r.apiResource.prepareCreate = r.prepareCreatePassword
+	r.apiResource.prepareUpdate = r.prepareUpdatePassword
+	return r
 }
 
 type vaultUsernamePasswordAccountResource struct {
@@ -134,47 +136,11 @@ func (r *vaultUsernamePasswordAccountResource) ConfigValidators(context.Context)
 			path.MatchRoot("password_wo"),
 			path.MatchRoot("password_wo_version"),
 		),
-		resourcevalidator.PreferWriteOnlyAttribute(
-			path.MatchRoot("password"),
-			path.MatchRoot("password_wo"),
-		),
 	}
 }
 
 func (r *vaultUsernamePasswordAccountResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	var plan models.VaultUsernamePasswordAccount
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	var config models.VaultUsernamePasswordAccount
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	password, ok := vaultAccountPassword(config, plan, true, &resp.Diagnostics)
-	if !ok {
-		return
-	}
-
-	var item api.VaultUsernamePasswordAccount
-	api.CopyTFtoAPI(ctx, reflect.ValueOf(&plan).Elem(), reflect.ValueOf(&item).Elem(), r.ApiClient.Product)
-	item.Password = password
-
-	created, err := api.CreateItem(r.ApiClient, item)
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating item", "Unexpected error: "+err.Error())
-		return
-	}
-
-	if err := api.CopyAPItoTF(ctx, reflect.ValueOf(created).Elem(), reflect.ValueOf(&plan).Elem(), reflect.TypeOf(created).Elem(), r.ApiClient.Product); err != nil {
-		resp.Diagnostics.AddError("Error converting API response", "Unexpected error converting API response to Terraform state: "+err.Error())
-		return
-	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	r.apiResource.Create(ctx, req, resp)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -228,47 +194,7 @@ func (r *vaultUsernamePasswordAccountResource) Read(ctx context.Context, req res
 }
 
 func (r *vaultUsernamePasswordAccountResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan models.VaultUsernamePasswordAccount
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	var state models.VaultUsernamePasswordAccount
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	var config models.VaultUsernamePasswordAccount
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-
-	passwordVersionChanged := !plan.PasswordWOVersion.Equal(state.PasswordWOVersion)
-	password, ok := vaultAccountPassword(config, plan, passwordVersionChanged, &resp.Diagnostics)
-	if !ok {
-		return
-	}
-
-	var item api.VaultUsernamePasswordAccount
-	api.CopyTFtoAPI(ctx, reflect.ValueOf(&plan).Elem(), reflect.ValueOf(&item).Elem(), r.ApiClient.Product)
-	stripVaultUsernamePasswordAccountReadOnlyFields(&item)
-	item.Password = password
-
-	updated, err := api.UpdateItem(r.ApiClient, item)
-	if err != nil {
-		resp.Diagnostics.AddError("Error updating item", "Unexpected error: "+err.Error())
-		return
-	}
-
-	if err := api.CopyAPItoTF(ctx, reflect.ValueOf(updated).Elem(), reflect.ValueOf(&plan).Elem(), reflect.TypeOf(updated).Elem(), r.ApiClient.Product); err != nil {
-		resp.Diagnostics.AddError("Error converting API response", "Unexpected error converting API response to Terraform state: "+err.Error())
-		return
-	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	r.apiResource.Update(ctx, req, resp)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -295,10 +221,29 @@ func (r *vaultUsernamePasswordAccountResource) Update(ctx context.Context, req r
 	)
 }
 
-func stripVaultUsernamePasswordAccountReadOnlyFields(item *api.VaultUsernamePasswordAccount) {
-	item.Personal = nil
-	item.OwnerUserID = nil
-	item.LastCheckoutTimestamp = nil
+func (r *vaultUsernamePasswordAccountResource) prepareCreatePassword(ctx context.Context, req resource.CreateRequest, item *api.VaultUsernamePasswordAccount, diagnostics *diag.Diagnostics) {
+	var config, plan models.VaultUsernamePasswordAccount
+	diagnostics.Append(req.Config.Get(ctx, &config)...)
+	diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if diagnostics.HasError() {
+		return
+	}
+	if password, ok := vaultAccountPassword(config, plan, true, diagnostics); ok {
+		item.Password = password
+	}
+}
+
+func (r *vaultUsernamePasswordAccountResource) prepareUpdatePassword(ctx context.Context, req resource.UpdateRequest, item *api.VaultUsernamePasswordAccount, diagnostics *diag.Diagnostics) {
+	var config, plan, state models.VaultUsernamePasswordAccount
+	diagnostics.Append(req.Config.Get(ctx, &config)...)
+	diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	diagnostics.Append(req.State.Get(ctx, &state)...)
+	if diagnostics.HasError() {
+		return
+	}
+	if password, ok := vaultAccountPassword(config, plan, !plan.PasswordWOVersion.Equal(state.PasswordWOVersion), diagnostics); ok {
+		item.Password = password
+	}
 }
 
 func vaultAccountPassword(config, plan models.VaultUsernamePasswordAccount, useWriteOnly bool, diagnostics *diag.Diagnostics) (string, bool) {
