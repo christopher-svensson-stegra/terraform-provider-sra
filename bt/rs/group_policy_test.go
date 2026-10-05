@@ -13,6 +13,7 @@ import (
 	"terraform-provider-sra/api"
 	"terraform-provider-sra/bt/models"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -94,14 +95,13 @@ func TestPRAGroupPolicyAccessConflicts(t *testing.T) {
 			enabled:        []string{"perm_shell_jump"},
 			accessConflict: true,
 		},
-		"unknown access defaults to disabled on create": {
+		"unknown configured access defers validation": {
 			plan: models.GroupPolicy{
 				PermAccessAllowed: types.BoolUnknown(),
 				AccessPermStatus:  types.StringUnknown(),
 				PermRemoteRdp:     types.BoolValue(true),
 			},
-			enabled:        []string{"perm_remote_rdp"},
-			accessConflict: true,
+			enabled: []string{"perm_remote_rdp"},
 		},
 		"undefined access status": {
 			plan: models.GroupPolicy{
@@ -153,6 +153,89 @@ func TestGroupPolicyModifyPlanRejectsJumpPermissionWithoutPRAAccess(t *testing.T
 	require.True(t, resp.Diagnostics.HasError())
 	assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "perm_access_allowed")
 	assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "perm_shell_jump")
+}
+
+func TestGroupPolicyModifyPlanResetsAllOmittedProductDefaults(t *testing.T) {
+	for _, product := range []string{api.ProductPRA, api.ProductRS} {
+		t.Run(product, func(t *testing.T) {
+			ctx := context.Background()
+			managed := &groupPolicyResource{apiResource: apiResource[api.GroupPolicy, models.GroupPolicy]{ApiClient: &api.APIClient{Product: product}}}
+			sch := groupPolicyTestSchema(t, managed)
+			config := models.GroupPolicy{Name: types.StringValue("Minimal")}
+			planModel := config
+			fields := reflect.ValueOf(&planModel).Elem()
+			for i := 0; i < fields.NumField(); i++ {
+				if fields.Type().Field(i).Tag.Get("sraproduct") == "" {
+					continue
+				}
+				switch fields.Field(i).Interface().(type) {
+				case types.Bool:
+					fields.Field(i).Set(reflect.ValueOf(types.BoolValue(true)))
+				case types.Int64:
+					fields.Field(i).Set(reflect.ValueOf(types.Int64Value(99)))
+				case types.String:
+					fields.Field(i).Set(reflect.ValueOf(types.StringValue("defined")))
+				}
+			}
+			plan := groupPolicyTestPlan(t, sch, planModel)
+			configPlan := groupPolicyTestPlan(t, sch, config)
+			resp := resource.ModifyPlanResponse{Plan: plan}
+			managed.ModifyPlan(ctx, resource.ModifyPlanRequest{Config: tfsdk.Config{Schema: sch, Raw: configPlan.Raw}, Plan: plan}, &resp)
+			require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+			var actual models.GroupPolicy
+			require.False(t, resp.Plan.Get(ctx, &actual).HasError())
+			values := reflect.ValueOf(actual)
+			for i := 0; i < values.NumField(); i++ {
+				field := values.Type().Field(i)
+				fieldProduct := field.Tag.Get("sraproduct")
+				if fieldProduct == "" {
+					continue
+				}
+				value := values.Field(i).Interface().(attr.Value)
+				name := field.Tag.Get("tfsdk")
+				if !strings.EqualFold(fieldProduct, product) {
+					assert.True(t, value.IsNull(), name)
+				} else if fallback, ok := groupPolicyProductDefault(name, value); ok {
+					assert.True(t, value.Equal(fallback), name)
+				} else {
+					assert.Equal(t, "defined", value.(types.String).ValueString(), name)
+				}
+			}
+		})
+	}
+}
+
+func TestGroupPolicyModifyPlanIgnoresOutOfBandJumpForValidation(t *testing.T) {
+	ctx := context.Background()
+	managed := &groupPolicyResource{apiResource: apiResource[api.GroupPolicy, models.GroupPolicy]{ApiClient: &api.APIClient{Product: api.ProductPRA}}}
+	sch := groupPolicyTestSchema(t, managed)
+	config := models.GroupPolicy{Name: types.StringValue("Minimal"), PermCollaborate: types.BoolValue(true)}
+	model := config
+	model.PermWebJump = types.BoolValue(true)
+	model.AccessPermStatus = types.StringValue("not_defined")
+	plan := groupPolicyTestPlan(t, sch, model)
+	configPlan := groupPolicyTestPlan(t, sch, config)
+	resp := resource.ModifyPlanResponse{Plan: plan}
+	managed.ModifyPlan(ctx, resource.ModifyPlanRequest{Config: tfsdk.Config{Schema: sch, Raw: configPlan.Raw}, Plan: plan}, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+	var actual models.GroupPolicy
+	require.False(t, resp.Plan.Get(ctx, &actual).HasError())
+	assert.False(t, actual.PermWebJump.ValueBool())
+}
+
+func TestGroupPolicyModifyPlanPreservesExplicitAndUnknownConfiguration(t *testing.T) {
+	ctx := context.Background()
+	managed := &groupPolicyResource{apiResource: apiResource[api.GroupPolicy, models.GroupPolicy]{ApiClient: &api.APIClient{Product: api.ProductPRA}}}
+	sch := groupPolicyTestSchema(t, managed)
+	config := models.GroupPolicy{Name: types.StringValue("Configured"), PermAccessAllowed: types.BoolValue(true), PermWebJump: types.BoolValue(true), PermInviteExternalUser: types.BoolUnknown()}
+	plan := groupPolicyTestPlan(t, sch, config)
+	resp := resource.ModifyPlanResponse{Plan: plan}
+	managed.ModifyPlan(ctx, resource.ModifyPlanRequest{Config: tfsdk.Config{Schema: sch, Raw: plan.Raw}, Plan: plan}, &resp)
+	require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+	var actual models.GroupPolicy
+	require.False(t, resp.Plan.Get(ctx, &actual).HasError())
+	assert.True(t, actual.PermWebJump.ValueBool())
+	assert.True(t, actual.PermInviteExternalUser.IsUnknown())
 }
 
 func TestGroupPolicyResourceCRUDWithPRAFields(t *testing.T) {

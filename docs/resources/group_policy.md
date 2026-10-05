@@ -4,12 +4,15 @@ page_title: "sra_group_policy Resource - sra"
 subcategory: ""
 description: |-
   Manages a Group Policy for either Privileged Remote Access (PRA) or Remote Support (RS). Product-specific attributes must only be configured for the matching appliance type.
+  Omitted permissions reset to their API defaults rather than preserving grants from prior state. Boolean permissions default to false. On RS, perm_support_allowed defaults to not_allowed, perm_routing_idle_timeout to 900, auto_assignment_max_sessions to 3, and perm_console_idle_timeout to -1. Attributes belonging to the other product remain null. The conditional defaults for access_perm_status and rep_perm_status remain API-computed.
   On PRA, enabling a Jump permission requires effective endpoint access: perm_access_allowed must be true, and access_perm_status must not be not_defined. The appliance otherwise normalizes enabled Jump permissions back to false.
 ---
 
 # sra_group_policy (Resource)
 
 Manages a Group Policy for either Privileged Remote Access (PRA) or Remote Support (RS). Product-specific attributes must only be configured for the matching appliance type.
+
+Omitted permissions reset to their API defaults rather than preserving grants from prior state. Boolean permissions default to `false`. On RS, `perm_support_allowed` defaults to `not_allowed`, `perm_routing_idle_timeout` to `900`, `auto_assignment_max_sessions` to `3`, and `perm_console_idle_timeout` to `-1`. Attributes belonging to the other product remain null. The conditional defaults for `access_perm_status` and `rep_perm_status` remain API-computed.
 
 On PRA, enabling a Jump permission requires effective endpoint access: `perm_access_allowed` must be `true`, and `access_perm_status` must not be `not_defined`. The appliance otherwise normalizes enabled Jump permissions back to `false`.
 

@@ -135,7 +135,7 @@ func TestDoRequest(t *testing.T) {
 		req, err := http.NewRequest("POST", fmt.Sprintf("%s/%s", c.RootURL, "created-empty"), nil)
 		assert.Nil(t, err)
 		body, err := c.doRequest(req)
-		assert.Nil(t, body)
+		assert.Empty(t, body)
 		assert.Nil(t, err)
 	}
 
